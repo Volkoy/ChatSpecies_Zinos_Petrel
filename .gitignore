@@ -1,0 +1,49 @@
+# 环境变量
+.env
+*.env
+config.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# 临时音频文件
+*.mp3
+output_*.mp3
+temp_*.mp3
+!intro5.mp3
+
+# ChromaDB（可选，如果数据库太大）
+# db5/
+# db5_qwen/
+
+# 临时文件
+temp_*
+*.tmp
+*.bak
+
+# 压缩包
+*.zip
+*.rar
+*.tar.gz

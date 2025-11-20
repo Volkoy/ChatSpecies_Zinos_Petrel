@@ -1,0 +1,31 @@
+# ==================== Core Framework ====================
+langchain==0.2.11
+langchain-chroma==0.1.2
+langchain-community==0.2.10
+langchain-openai==0.1.20
+chromadb
+streamlit
+python-dotenv
+
+# ==================== Qwen Related (New Addition)====================
+dashscope>=1.24.6
+numpy
+tqdm  # Vectorized Progress Display
+
+# ==================== Existing Dependencies ====================
+pypdf
+tiktoken
+SpeechRecognition==3.10.0
+# pysqlite3-binary  # Windows/Conda environment is not required and has been removed from the code.
+gTTS
+pydub
+ffmpeg-python
+pocketsphinx
+st-supabase-connection==2.1.1
+supabase  # Supabase Client (for testing)
+
+# ==================== Optional Dependencies ====================
+ddgs  # Free Internet Search (Recommended for fact-checking supplements; formerly known as duckduckgo-search)
+tavily-python      # High-Quality Search (Optional, Requires API Key)
+# cohere         # Reorder (optional)
+# langchain-openai  # OpenAI (optional)
