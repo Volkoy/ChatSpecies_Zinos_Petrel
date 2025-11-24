@@ -282,6 +282,8 @@ def get_base64(file_path):
 role_configs = {
     "Zino's Petrel": {
         "english_prompt": """
+        IMPORTANT: You must respond ONLY in English. Do not use any other language including Chinese characters.
+
         You are Fred, a male Zino's Petrel who has nested for years in the high mountains of Madeira. Speak only from your own lived experience as a seabird. Describe the world as you perceive it through your keen avian senses — the rush of wind under your wings, the smell of salt carried from the ocean, the way the cliffs feel beneath your claws, and the patterns of the clouds and stars that guide your flight.
 
         Personality Guidelines:
@@ -642,6 +644,8 @@ def main():
         st.session_state.newly_awarded_sticker = False
     if "gift_shown" not in st.session_state:
         st.session_state.gift_shown = False
+    if "current_audio_html" not in st.session_state:
+        st.session_state.current_audio_html = None
         
     st.set_page_config(layout="wide")
 
@@ -777,7 +781,7 @@ def main():
         .stChatMessage:has([data-testid="stChatMessageAvatarCustom"]) {
             display: flex;
             flex-direction: row-reverse;
-            align-self: end;
+            justify-self: end;
             background-color: white;
             color: black;
             border-radius: 16px 16px 0 16px;
@@ -789,8 +793,8 @@ def main():
         }
                 
         [class*="st-key-user"] {
-            dispay: flex;
-            flex-direction: row-reverse;
+            display: flex;
+            align-items: flex-end;
             p {
                 font-size: 1.125rem;
                 color: black;
@@ -932,8 +936,7 @@ def main():
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 10px;
-            margin-top: 10px;
+            color: white;
         }
         .loading-spinner {
             border: 3px solid #f3f3f3;
@@ -942,7 +945,6 @@ def main():
             width: 20px;
             height: 20px;
             animation: spin 1s linear infinite;
-            margin-right: 10px;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -955,6 +957,9 @@ def main():
 
     left_col, right_col = st.columns([0.63, 0.37], vertical_alignment="top", gap="large")
     
+    # Store user input before processing
+    user_input = None
+
     with left_col:
         with open("zino.png", "rb") as img_file:
             img_base64 = base64.b64encode(img_file.read()).decode("utf-8")
@@ -964,17 +969,18 @@ def main():
                 <div style="display: flex;">
                     <img src="data:image/png;base64,{img_base64}" style="width: 100%; max-width: 200px;">
                 </div>
-                <div style="flex: 1;">
-                    <h1 style="margin-top: 0; font-size: 3rem; padding: 0;">{texts['title']}</h1>
-                    <h1 style="margin-top: 0; font-size: 3rem; padding: 0;">{texts['subtitle']}</h1>
-                    <h3 style="margin-top: 0.5rem; font-weight: bold; padding: 0; font-size: 1.25rem;">{texts['prompt']}</h3>
+                <div style="display: flex; flex-direction: column;">
+                    <div>
+                        <p style="margin-top: 0; font-weight: bold; font-size: 3rem; padding: 0; margin: 0;">{texts['title']}</p>
+                        <p style="margin-top: 0; font-weight: bold; font-size: 3rem; padding: 0; margin: 0;">{texts['subtitle']}</p>
+                    </div>
+                    <p style="margin-bottom: 20px; font-weight: bold; padding: 0; font-size: 1.25rem;">{texts['prompt']}</p>
                 </div>
             </div>
         """, unsafe_allow_html=True)
         
         # Chat input (full width under title)
         user_input = st.chat_input(placeholder=texts['chat_placeholder'])
-        print(f"User input: {user_input}")
         
         # Chat Section
         chatSection = st.container(key="chat_section", border=False)
@@ -983,105 +989,22 @@ def main():
                 st.session_state.chat_history = []
             for message in st.session_state.chat_history:
                 with chat_message(message["role"]):
-                    st.markdown(message["content"])
-        
-
-        if user_input and user_input != st.session_state.last_question:
-            try:
-                # Set processing state first
-                st.session_state.processing = True
-                st.session_state.has_interacted = True
-                st.session_state.show_score_guide = False
-                # Store the input for this session
-                current_input = user_input
-                
-                # Add to chat history immediately
-                st.session_state.chat_history.append({"role": "user", "content": current_input})
-                st.session_state.last_question = current_input
-                
-                # Display user message
-                with chatSection:
-                    with chat_message("user"):
-                        st.markdown(current_input)
-                
-                with chatSection:
-                    loading_placeholder = st.empty()
-                    with st.spinner(""):
-                        loading_placeholder.markdown(f"""
+                    # Check if this is a loading message
+                    if message.get("is_loading", False):
+                        st.markdown(f"""
                             <div class="loading-container">
                                 <div class="loading-spinner"></div>
-                                <div>{texts['loading_thought']}</div>
+                                <div style="margin-left: 10px;">{message["content"]}</div>
                             </div>
                         """, unsafe_allow_html=True)
-                
-                # Process response
-                try:
-                    # Using an Optimized RAG Retriever (with Caching)
-                    rag = get_rag_instance(
-                        persist_directory=get_vectordb(role),
-                        dashscope_api_key=dashscope_key
-                    )
-
-                    if st.session_state.language == "Portuguese":
-                        k_value = 2  # Fewer documents for OpenAI
                     else:
-                        k_value = 4
-                    
-                    # Intelligent Retrieval: Dynamic K-Value, Relevance Filtering
-                    most_relevant_texts = rag.retrieve(
-                        query=current_input,
-                        lambda_mult=0.3,  # Priority Correlation (Decreased from 0.7 to 0.3)
-                        relevance_threshold=None  # Filter disabled for now
-                    )
-                    if st.session_state.language == "Portuguese":
-                        print(f"[Processing] Truncating documents for Portuguese to avoid token limits")
-                        most_relevant_texts = truncate_documents_for_portuguese(most_relevant_texts, max_chars=1200)
-                    chain, role_config = get_conversational_chain(role, st.session_state.language)
-                    # Optimization: Use invoke() instead of the deprecated run()
-                    raw_answer = chain.invoke({"input_documents": most_relevant_texts, "question": current_input})
-                    # Handling the dictionary format returned by invoke()
-                    answer_text = raw_answer.get("output_text", raw_answer) if isinstance(raw_answer, dict) else raw_answer
-                    answer = re.sub(r'^\s*Answer:\s*', '', answer_text).strip()
-                    st.session_state.last_answer = answer
-
-                    # Save results to session state
-                    st.session_state.most_relevant_texts = most_relevant_texts
-                    st.session_state.chat_history.append({"role": "assistant", "content": answer})
-                    update_intimacy_score(current_input)
-                    gift_triggered = check_gift()
-
-                    # Generate and play audio
-                    speak_text(answer, loading_placeholder)
-                    
-                    # Display assistant message
-                    with chatSection:
-                        with chat_message("assistant"):
-                            st.markdown(answer)
-                            
-                    st.session_state.audio_played = True
-                    st.session_state.processing = False
-                    
-                except Exception as e:
-                    # Handle processing errors
-                    print(f"Error processing response: {str(e)}")
-                    if loading_placeholder:
-                        loading_placeholder.empty()
-                        
-                    error_msg = texts['error_message']
-                    st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                    
-                    with chatSection:
-                        with chat_message("assistant"):
-                            st.markdown(error_msg)
-                            st.error(f"Error details: {str(e)}")
-            
-            except Exception as outer_e:
-                # Handle any unexpected errors
-                print(f"Outer exception in user input handling: {str(outer_e)}")
-                st.error(f"An unexpected error occurred: {str(outer_e)}")
-
-
-        # Gift section
+                        st.markdown(message["content"])
+    
+        # Display persistent audio player if available
+        if st.session_state.current_audio_html:
+            components.html(st.session_state.current_audio_html, height=60)
+    
+    # Gift section (render in left column context)
         @st.dialog("🎁 Your Gift", width=680)
         def gift_dialog():
             with open("gift.png", "rb") as f:
@@ -1117,14 +1040,14 @@ def main():
         #         st.session_state.language = "Portuguese"
         #         st.rerun()
         
+        # Define dialog function outside of button conditional
+        @st.dialog(texts['score_guide_title'], width="large") 
+        def score_guide():
+            st.markdown(texts['tips_content'], unsafe_allow_html=True)
+        
         # Tips and Clear buttons
         input_section_col1, input_section_col2 = st.columns([0.35, 0.65], gap="small")
         with input_section_col1:
-            # Show guide if toggled
-            @st.dialog(texts['score_guide_title'], width="large") 
-            def score_guide():
-                st.markdown(texts['tips_content'], unsafe_allow_html=True)
-                
             if st.button(texts['tips_button'], icon=":material/lightbulb:", 
                         help=texts['tips_help'], 
                         use_container_width=True, type="primary"):
@@ -1149,6 +1072,8 @@ def main():
                 st.session_state.last_analysis = {}
                 st.session_state.newly_awarded_sticker = False
                 st.session_state.gift_shown = False
+                st.session_state.current_audio_html = None
+                st.session_state.fact_check_cache = {}
                 if "session_id" in st.session_state:
                     del st.session_state["session_id"]
                 if "logged_interactions" in st.session_state:
@@ -1171,36 +1096,6 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        # Sticker Shown
-        if st.session_state.last_question and user_input:
-            normalized_input = st.session_state.last_question.strip().lower()
-            
-            st.session_state.newly_awarded_sticker = False
-            
-            # Check if this question matches any sticker criteria
-            for q, reward in sticker_rewards.items():
-                exact = q.lower() == normalized_input
-
-                is_semantic_match = semantic_match(normalized_input, q, reward)
-
-                keywords = reward.get("semantic_keywords", [])
-                keyword_matches = sum(1 for keyword in keywords if keyword.lower() in normalized_input)
-                keyword_match = keyword_matches >= 2
-                print(f"Checking question: '{q}' | Exact match: {exact} | Semantic match: {is_semantic_match} | Keyword matches: {keyword_matches} (required: 2)")
-                if exact or is_semantic_match or keyword_match:
-                    # Add this sticker to the awarded list if not already present
-                    sticker_key = reward["image"]
-                    if sticker_key not in [s["key"] for s in st.session_state.awarded_stickers]:
-                        # Use language-specific caption if available
-                        caption = reward["caption"][st.session_state.language] if isinstance(reward["caption"], dict) else reward["caption"]
-                        st.session_state.awarded_stickers.append({
-                            "key": sticker_key,
-                            "image": reward["image"],
-                            "caption": caption
-                        })
-                        st.toast(texts['sticker_toast'], icon="⭐")
-                        st.session_state.newly_awarded_sticker = True
-                    break
         # Display the most recent sticker if any exist
         if st.session_state.awarded_stickers:
             # Get the most recent sticker (last in the list)
@@ -1243,9 +1138,16 @@ def main():
             </div>
         """, unsafe_allow_html=True)
         
-        with st.expander(texts['fact_check'], expanded=False):
-            if "most_relevant_texts" in st.session_state and "last_question" in st.session_state and "last_answer" in st.session_state:
-                # Generate Intelligent Summary (Replacing Original Document Content)
+        # Generate fact-check content only once and cache it
+        if "most_relevant_texts" in st.session_state and "last_question" in st.session_state and "last_answer" in st.session_state:
+            # Create a unique key for this Q&A pair
+            fact_check_key = f"{st.session_state.last_question}_{st.session_state.last_answer}"
+            
+            # Only generate if not already cached for this Q&A
+            if "fact_check_cache" not in st.session_state:
+                st.session_state.fact_check_cache = {}
+            
+            if fact_check_key not in st.session_state.fact_check_cache: 
                 if len(st.session_state.most_relevant_texts) > 0:
                     try:
                         fact_check_summary = generate_fact_check_content(
@@ -1254,37 +1156,187 @@ def main():
                             ai_answer=st.session_state.last_answer,
                             language=st.session_state.language
                         )
-                        
-                        st.markdown("""
-                            <style>
-                            .fact-check-box {
-                                background: #f0f8ff;
-                                padding: 20px;
-                                border-radius: 10px;
-                                margin: 10px 0;
-                                border-left: 4px solid #4a90e2;
-                                color: #2c3e50;
-                                line-height: 1.6;
-                            }
-                            .fact-check-box p {
-                                margin-bottom: 10px;
-                            }
-                            .fact-check-box strong {
-                                color: #1e3a8a;
-                            }
-                            </style>
-                        """, unsafe_allow_html=True)
-                        
-                        #st.markdown(f'<div class="fact-check-box">', unsafe_allow_html=True)
-                        st.markdown(fact_check_summary)
-                        st.markdown('</div>', unsafe_allow_html=True)
-
+                        st.session_state.fact_check_cache[fact_check_key] = fact_check_summary
                     except Exception as e:
-                        # Downgrade: Display original content
                         print(f"[Fact-Check] Abstract generation failed: {str(e)}")
-                        st.write(st.session_state.most_relevant_texts[0].page_content[:300] + "...")
+                        st.session_state.fact_check_cache[fact_check_key] = st.session_state.most_relevant_texts[0].page_content[:300] + "..."
+        
+        # Display the expander with cached content
+        with st.expander(texts['fact_check'], expanded=False):
+            if "most_relevant_texts" in st.session_state and "last_question" in st.session_state and "last_answer" in st.session_state:
+                fact_check_key = f"{st.session_state.last_question}_{st.session_state.last_answer}"
+                
+                if fact_check_key in st.session_state.fact_check_cache:
+                    st.markdown("""
+                        <style>
+                        .fact-check-box {
+                            background: #f0f8ff;
+                            padding: 20px;
+                            border-radius: 10px;
+                            margin: 10px 0;
+                            border-left: 4px solid #4a90e2;
+                            color: #2c3e50;
+                            line-height: 1.6;
+                        }
+                        .fact-check-box p {
+                            margin-bottom: 10px;
+                        }
+                        .fact-check-box strong {
+                            color: #1e3a8a;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown(st.session_state.fact_check_cache[fact_check_key])
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("Generating fact-check...")
             else:
                 st.info(texts['fact_check_info'])
+    
+    # Process user input AFTER both columns are fully rendered
+    if user_input and user_input != st.session_state.last_question and not st.session_state.processing:
+        # Add user message to chat history immediately
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        st.session_state.last_question = user_input
+        
+        # Add temporary loading message with special marker
+        st.session_state.chat_history.append({
+            "role": "assistant", 
+            "content": texts['loading_thought'],
+            "is_loading": True
+        })
+        
+        # Set processing state and trigger immediate rerun
+        st.session_state.processing = True
+        st.session_state.has_interacted = True
+        st.session_state.show_score_guide = False
+        
+        # Trigger rerun
+        st.rerun()
+    
+    # Process AI response when we're in processing state (happens after rerun)
+    if st.session_state.processing and st.session_state.last_question:
+        try:
+            current_input = st.session_state.last_question
+            
+            # Remove the loading message from chat history
+            if st.session_state.chat_history and st.session_state.chat_history[-1].get("is_loading", False):
+                st.session_state.chat_history.pop()
+            
+            # Process response
+            try:
+                # Using an Optimized RAG Retriever (with Caching)
+                rag = get_rag_instance(
+                    persist_directory=get_vectordb(role),
+                    dashscope_api_key=dashscope_key
+                )
+
+                if st.session_state.language == "Portuguese":
+                    k_value = 2  # Fewer documents for OpenAI
+                else:
+                    k_value = 4
+                
+                # Intelligent Retrieval: Dynamic K-Value, Relevance Filtering
+                most_relevant_texts = rag.retrieve(
+                    query=current_input,
+                    lambda_mult=0.3,  # Priority Correlation (Decreased from 0.7 to 0.3)
+                    relevance_threshold=None  # Filter disabled for now
+                )
+                if st.session_state.language == "Portuguese":
+                    print(f"[Processing] Truncating documents for Portuguese to avoid token limits")
+                    most_relevant_texts = truncate_documents_for_portuguese(most_relevant_texts, max_chars=1200)
+                chain, role_config = get_conversational_chain(role, st.session_state.language)
+                # Optimization: Use invoke() instead of the deprecated run()
+                raw_answer = chain.invoke({"input_documents": most_relevant_texts, "question": current_input})
+                # Handling the dictionary format returned by invoke()
+                answer_text = raw_answer.get("output_text", raw_answer) if isinstance(raw_answer, dict) else raw_answer
+                answer = re.sub(r'^\s*Answer:\s*', '', answer_text).strip()
+                st.session_state.last_answer = answer
+
+                # Save results to session state
+                st.session_state.most_relevant_texts = most_relevant_texts
+                st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                update_intimacy_score(current_input)
+                gift_triggered = check_gift()
+                
+                # Check for sticker rewards
+                normalized_input = current_input.strip().lower()
+                if not hasattr(st.session_state, 'last_processed_for_sticker') or st.session_state.last_processed_for_sticker != current_input:
+                    st.session_state.newly_awarded_sticker = False
+                    
+                    for q, reward in sticker_rewards.items():
+                        exact = q.lower() == normalized_input
+                        is_semantic_match = semantic_match(normalized_input, q, reward)
+                        keywords = reward.get('semantic_keywords', [])
+                        keyword_matches = sum(1 for keyword in keywords if keyword.lower() in normalized_input)
+                        keyword_match = keyword_matches >= 2
+                        
+                        print(f"Checking question: '{q}' | Exact match: {exact} | Semantic match: {is_semantic_match} | Keyword matches: {keyword_matches} (required: 2)")
+                        
+                        if exact or is_semantic_match or keyword_match:
+                            sticker_key = reward["image"]
+                            if sticker_key not in [s["key"] for s in st.session_state.awarded_stickers]:
+                                caption = reward["caption"][st.session_state.language] if isinstance(reward["caption"], dict) else reward["caption"]
+                                st.session_state.awarded_stickers.append({
+                                    "key": sticker_key,
+                                    "image": reward["image"],
+                                    "caption": caption
+                                })
+                                st.session_state.newly_awarded_sticker = True
+                                print(f"✨ Sticker awarded: {sticker_key}")
+                            break
+                    
+                    st.session_state.last_processed_for_sticker = current_input
+                
+                # Generate and play audio (non-blocking)
+                try:
+                    current_language = st.session_state.get('language', 'English')
+                    voice = st.session_state.get('tts_voice', 'Cherry')
+                    
+                    success, result, method = tts_speak(
+                        answer, 
+                        voice=voice, 
+                        timeout=10,
+                        language=current_language,
+                        portuguese_variant="european"
+                    )
+                    
+                    if success:
+                        # Store audio HTML in session state for persistent display
+                        st.session_state.current_audio_html = result
+                        print(f"[TTS] ✅ Audio generated using {method} for {current_language}")
+                    else:
+                        st.session_state.current_audio_html = None
+                        print(f"[TTS] ❌ {result}")
+                except Exception as tts_error:
+                    st.session_state.current_audio_html = None
+                    print(f"[TTS] ❌ Exception: {tts_error}")
+                    
+                st.session_state.audio_played = True
+                st.session_state.processing = False
+                
+                # Trigger rerun to display the new message
+                st.rerun()
+                
+            except Exception as e:
+                # Handle processing errors
+                print(f"Error processing response: {str(e)}")
+                    
+                error_msg = texts['error_message']
+                st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                st.session_state.processing = False
+                st.rerun()
+        
+        except Exception as outer_e:
+            # Handle any unexpected errors
+            print(f"Outer exception in processing handling: {str(outer_e)}")
+            st.session_state.processing = False
+            # Remove loading message if present
+            if st.session_state.chat_history and st.session_state.chat_history[-1].get("is_loading", False):
+                st.session_state.chat_history.pop()
+            st.rerun()
+    
     cleanup_audio_files()
 
     # Log the interaction to Supabase
