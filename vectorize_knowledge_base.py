@@ -21,17 +21,41 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
+import json
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-PDF_FOLDER = "Mediterranean Monk Seal"
-VECTOR_DB_PATH = "db6_qwen"
+PDF_FOLDER = "zinos_petrel_knowledge"
+MUSEUM_DOCS_FOLDER = "museum_summaries"  # put your JSON/JSONL or txt here
+COLLECTION_NAME = "mmf_zinospetrel_knowledge"
+VECTOR_DB_PATH = "db5_qwen"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200  # 20% overlap, maintains context continuity
 # Read Embedding model from environment variables (consistent with rag_utils.py)
 EMBEDDING_MODEL = os.getenv("QWEN_EMBEDDING_MODEL", "text-embedding-v3")
+
+def sanitize_metadata(meta: dict) -> dict:
+    """
+    Chroma requires metadata values to be str/int/float/bool.
+    Convert lists/dicts to strings.
+    """
+    clean = {}
+    for k, v in (meta or {}).items():
+        if v is None:
+            continue
+        if isinstance(v, (str, int, float, bool)):
+            clean[k] = v
+        elif isinstance(v, list):
+            clean[k] = ",".join(map(str, v))
+        elif isinstance(v, dict):
+            clean[k] = json.dumps(v, ensure_ascii=False)
+        else:
+            clean[k] = str(v)
+    return clean
+
 
 def get_pdf_files(folder_path):
     """Get all PDF files in the folder"""
@@ -56,10 +80,12 @@ def load_and_split_pdf(pdf_path, text_splitter):
         # Add metadata to each document
         for i, page in enumerate(pages):
             page.metadata.update({
-                "source_file": pdf_path.name,
-                "page": i + 1,
-                "total_pages": len(pages)
+                "doc_type": "pdf",
+                "priority": 10,          # default lower than MMF summaries
+                "scope": ["general"],
+                "language": "unknown"    # optional; you can set "pt"/"en" if you know per file
             })
+
         
         # Split documents
         chunks = text_splitter.split_documents(pages)
@@ -98,6 +124,79 @@ def vectorize_documents(pdf_files, embeddings, text_splitter):
     
     return all_chunks
 
+def load_museum_docs(folder_path: str):
+    """
+    Loads museum summary docs from JSON or JSONL files.
+    Expected fields:
+      - text (or text_pt / text_en)
+      - priority (int)
+      - scope (list)
+      - language ("pt"/"en")
+      - source, title, id (optional)
+    """
+    docs = []
+    folder = Path(folder_path)
+    if not folder.exists():
+        print(f"ℹ️  Museum docs folder '{folder_path}' not found — skipping.")
+        return docs
+
+    for fp in folder.glob("*"):
+        if fp.suffix.lower() not in [".json", ".jsonl", ".txt", ".md"]:
+            continue
+
+        if fp.suffix.lower() in [".txt", ".md"]:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+            docs.append(Document(
+                page_content=text,
+                metadata={
+                    "source": "MMF internal summary",
+                    "source_file": fp.name,
+                    "priority": 100,
+                    "scope": ["mmf", "specimen"],
+                    "language": "pt"
+                }
+            ))
+            continue
+
+        raw = fp.read_text(encoding="utf-8", errors="ignore")
+        if fp.suffix.lower() == ".jsonl":
+            lines = [l for l in raw.splitlines() if l.strip()]
+            items = [json.loads(l) for l in lines]
+        else:
+            items = [json.loads(raw)]
+            if isinstance(items[0], list):
+                items = items[0]
+
+        for item in items:
+            # Prefer English text if you stored it; otherwise keep PT.
+            text = item.get("text_en") or item.get("text") or item.get("text_pt")
+            if not text:
+                continue
+
+            meta = {
+                "source": item.get("source", "MMF internal summary"),
+                "title": item.get("title", fp.stem),
+                "doc_id": item.get("id", fp.stem),
+                "source_file": fp.name,
+                "priority": int(item.get("priority", 100)),
+                "scope": item.get("scope", ["mmf"]),
+                "language": item.get("language", "pt"),
+                "doc_type": "museum_summary"
+            }
+            docs.append(Document(page_content=text, metadata=meta))
+
+    print(f"✅ Loaded {len(docs)} museum summary docs")
+    return docs
+
+def split_documents(docs, chunk_size, chunk_overlap):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ". ", " ", ""]
+    )
+    return splitter.split_documents(docs)
+
+
 def create_vector_store(chunks, embeddings, persist_directory):
     """Create and persist vector database"""
     print(f"\n🔄 Creating vector database...")
@@ -118,19 +217,20 @@ def create_vector_store(chunks, embeddings, persist_directory):
         
         for i in tqdm(range(0, len(chunks), batch_size), desc="Vectorizing", unit="batch"):
             batch = chunks[i:i + batch_size]
-            
+
+            for d in batch:
+                d.metadata = sanitize_metadata(d.metadata)
+
             if vectordb is None:
-                # First time creation
                 vectordb = Chroma.from_documents(
                     documents=batch,
                     embedding=embeddings,
                     persist_directory=persist_directory,
-                    collection_name="zinos_petrel_knowledge"
+                    collection_name=COLLECTION_NAME
                 )
             else:
-                # Add to existing database
                 vectordb.add_documents(batch)
-        
+
         print(f"\n✅ Vector database created successfully!")
         return vectordb
     
@@ -141,24 +241,47 @@ def create_vector_store(chunks, embeddings, persist_directory):
         sys.exit(1)
 
 def test_retrieval(vectordb):
-    """Test retrieval functionality"""
-    print(f"\n🧪 Testing retrieval functionality...")
-    
+    print(f"\n🧪 Testing retrieval functionality (MMF monk seal)...")
+
     test_queries = [
-        "What is Zino's Petrel?",
-        "Where does Zino's Petrel nest?",
-        "What does Zino's Petrel eat?"
+        "When was the MMF monk seal specimen captured?",
+        "How many monk seals live in Madeira?",
+        "What threats do monk seals face near Madeira?"
     ]
-    
+
     for query in test_queries:
         print(f"\n📝 Query: '{query}'")
-        results = vectordb.similarity_search(query, k=2)
-        
+        results = retrieve_with_priority(vectordb, query, k_final=4)
+
         for i, doc in enumerate(results, 1):
             print(f"\n  Result {i}:")
-            print(f"    - Source: {doc.metadata.get('source_file', 'Unknown')}")
+            print(f"    - Priority: {doc.metadata.get('priority')}")
+            print(f"    - Scope: {doc.metadata.get('scope')}")
+            print(f"    - Source: {doc.metadata.get('source_file', doc.metadata.get('source', 'Unknown'))}")
             print(f"    - Page: {doc.metadata.get('page', 'N/A')}")
-            print(f"    - Content preview: {doc.page_content[:150]}...")
+            preview = doc.page_content[:160]
+            preview = preview.replace("\n", " ").strip()
+            print(f"    - Preview: {preview}...")
+
+
+
+def retrieve_with_priority(vectordb, query: str, k_final: int = 6):
+    candidates = vectordb.similarity_search(query, k=30)
+
+    def score(doc):
+        priority = int(doc.metadata.get("priority", 0))
+
+        scope = doc.metadata.get("scope", "")  # now string
+        bonus = 0
+        if "specimen" in scope or "mmf" in scope:
+            bonus = 50
+
+        return priority + bonus
+
+    candidates.sort(key=score, reverse=True)
+    return candidates[:k_final]
+
+
 
 def main():
     """Main function"""
@@ -174,7 +297,12 @@ def main():
         sys.exit(1)
     
     print(f"✅ API Key configured")
-    
+
+    museum_docs = load_museum_docs(MUSEUM_DOCS_FOLDER)
+
+    # Use smaller chunks for museum facts (high signal)
+    museum_chunks = split_documents(museum_docs, chunk_size=500, chunk_overlap=80) if museum_docs else []
+
     # 2. Get PDF file list
     pdf_files = get_pdf_files(PDF_FOLDER)
     print(f"✅ Found {len(pdf_files)} PDF files")
@@ -198,6 +326,9 @@ def main():
     # 5. Vectorize documents
     chunks = vectorize_documents(pdf_files, embeddings, text_splitter)
     
+    chunks = museum_chunks + chunks
+    print(f"✅ Total chunks after adding museum docs: {len(chunks)}")
+
     if not chunks:
         print("❌ No documents processed successfully")
         sys.exit(1)

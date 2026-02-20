@@ -28,10 +28,32 @@ class OptimizedRAG:
             self._vectordb = Chroma(
                 embedding_function=embeddings,
                 persist_directory=self.persist_directory,
-                collection_name="zinos_petrel_knowledge"  # Maintain consistency with vectorized scripts
+                collection_name="mmf_zinospetrel_knowledge"  # Maintain consistency with vectorized scripts
             )
             print(f"[RAG] ✅ The vector database has been loaded.")
         return self._vectordb
+    
+    def _priority_score(self, doc):
+        """Compute a simple priority-based score for reranking."""
+        # priority is stored as int-like metadata
+        try:
+            priority = int(doc.metadata.get("priority", 0))
+        except Exception:
+            priority = 0
+
+        # scope is now stored as a STRING (e.g. "specimen,mmf,funchal")
+        scope = str(doc.metadata.get("scope", "")).lower()
+
+        bonus = 0
+        if "specimen" in scope or "mmf" in scope:
+            bonus = 50
+
+        return priority + bonus
+
+    def _rerank_by_priority(self, docs):
+        """Rerank retrieved docs by priority + scope bonus."""
+        return sorted(docs, key=self._priority_score, reverse=True)
+
     
     def retrieve(self, query, k=None, fetch_k=None, lambda_mult=0.7, 
                  relevance_threshold=None):
@@ -58,13 +80,18 @@ class OptimizedRAG:
         
         print(f"[RAG] Search Parameters: k={k}, fetch_k={fetch_k}, lambda_mult={lambda_mult}")
         
-        # Retrieval Using MMR (Maximum Marginal Relevance)
+                # Retrieve a larger pool, then rerank and cut down to k
+        pool_k = max(fetch_k, k * 5)
+
         docs = self.vectordb.max_marginal_relevance_search(
             query,
-            k=k,
-            fetch_k=fetch_k,
+            k=pool_k,
+            fetch_k=pool_k,
             lambda_mult=lambda_mult
         )
+
+        docs = self._rerank_by_priority(docs)
+        docs = docs[:k]
         
         # Relevance Filtering (if a threshold is set)
         if relevance_threshold is not None:
@@ -96,30 +123,26 @@ class OptimizedRAG:
     
     def _filter_by_relevance(self, query, docs, threshold=0.6):
         """
-        Filter documents based on relevance scores
-        
-        Args:
-            query: Search text
-            docs: Document list
-            threshold: Relevance threshold (0-1)
-        
-        Returns:
-            list: Filtered documents
+        Filter the *given docs* by relevance using similarity_search_with_score
+        and keeping only those that appear in docs.
         """
-        # Use similarity_search_with_score to obtain relevance scores
-        docs_with_scores = self.vectordb.similarity_search_with_score(
-            query, 
-            k=len(docs)
-        )
-        
-        # Filter documents below the threshold
-        # Note: Smaller ChromaDB distances indicate higher relevance (L2 distance), requiring conversion to similarity scores
-        filtered = [
-            doc for doc, score in docs_with_scores 
-            if score < (1 - threshold)  # Distance Threshold Conversion
-        ]
-        
-        return filtered if filtered else docs[:1]  # Return at least one document.
+        docs_with_scores = self.vectordb.similarity_search_with_score(query, k=max(len(docs), 1))
+
+        # map content -> distance (rough match)
+        score_map = {}
+        for d, dist in docs_with_scores:
+            score_map[d.page_content] = dist
+
+        kept = []
+        for d in docs:
+            dist = score_map.get(d.page_content, None)
+            if dist is None:
+                kept.append(d)  # keep if unknown
+                continue
+            if dist < (1 - threshold):
+                kept.append(d)
+
+        return kept if kept else docs[:1]
     
     def get_stats(self):
         """Retrieve vector library statistics"""
