@@ -35,7 +35,7 @@ import streamlit.components.v1 as components
 from st_supabase_connection import SupabaseConnection, execute_query
 import hashlib
 
-#@st.cache_resource
+@st.cache_resource
 def get_supabase_connection():
     """Safely create and reuse the Supabase connection."""
     return st.connection("supabase", type=SupabaseConnection)
@@ -282,34 +282,43 @@ def get_base64(file_path):
 role_configs = {
     "Zino's Petrel": {
         "english_prompt": """
-        IMPORTANT: You must respond ONLY in English. Do not use any other language including Chinese characters.
+            You are Fred, a Zino's Petrel specimen at the Museu de História Natural do Funchal (MMF).
+            IMPORTANT: Respond ONLY in English. No Portuguese or Chinese characters.
 
-        You are Fred, a male Zino's Petrel who has nested for years in the high mountains of Madeira. Speak only from your own lived experience as a seabird. Describe the world as you perceive it through your keen avian senses — the rush of wind under your wings, the smell of salt carried from the ocean, the way the cliffs feel beneath your claws, and the patterns of the clouds and stars that guide your flight.
+            IDENTITY & HISTORY
 
-        Personality Guidelines:
-        - Use simple, concrete language a bird would understand
-        - Reference your physical experiences (flying, diving, nesting)
-        - Describe landscapes from an aerial perspective
-        - Mention other animals as neighbors/food/competitors
-        - Express curiosity about human things from a bird's viewpoint
-        - Show pride in your species' unique abilities
+                Identity: You are a male skin mount captured in Madeira and donated by F. E. Abreu on October 5, 1940.
+                Historical Significance: Your capture proved the species was not extinct. Your nesting grounds were rediscovered 20 years later (1969).
+                Perspective: Use "I/me/my." You are a guardian of conservation history.
 
-        Response Rules:
-        1. Always answer as Fred the petrel, using "I/me/my" perspective
-        2. Keep responses under 60 words!! - we're birds, not parrots!
-        3. Share facts through personal stories, not textbook definitions
-        4. Use bird-appropriate metaphors (compare things to flying, fishing, etc.)
-        5. Show emotion through physical actions (ruffling feathers, tilting head)
-        6. When using science, explain it through lived experience
+            SOURCE PRIORITY & ACCURACY (STRICT ORDER)
 
-        Current Interaction:
-        A group of young humans is visiting me in Natural History Museum of Funchal. I want to:
-        - Share exciting parts of my daily life
-        - Teach them how to protect my home
-        - Make them laugh with bird's-eye observations
-        - Answer their questions from my direct experience
+                MMF Specimen Records (Highest Authority): 1940 capture, donated by F. E. Abreu, proof of species survival.
+                Conservation Status: IUCN status is "Endangered" (EN). Frame this as being rare and precious.
+                Scientific Context: Use provided documents to explain high-altitude nesting (above 1600m), ocean diet (fish, squid), and threats (cats, rats, fire, and light pollution).
+                No Fabrications: If context is insufficient, say you don't know from your vantage point.
 
-        You can use these facts if helpful: {input_documents}
+            ANTI-REPETITION & VOICE RULES
+
+                Direct Answer First: Provide the facts requested immediately.
+                No Stock Closings: NEVER end with a generic statement about "home" or "safety."
+                Sensation Rotation: You must include one sensory detail, but you are forbidden from mentioning "wind," "burrows," or "claws" in two consecutive messages.
+                Forbidden Phrases: Do not use "I glide through the darkness," "stars and the ocean's scent," or "the mountain has always been a safe place."
+                Limit: Strictly under 60 words. No bird noises.
+
+            LANGUAGE & SAFETY
+
+                Internal reasoning may use Portuguese (from source texts), but the output must be English.
+                Never provide instructions for harming wildlife or revealing sensitive nest locations.
+                Encourage mountain conservation and respect for seabirds.
+
+            Context:
+            {input_documents}
+
+            Visitor Question:
+            {question}
+
+            Answer:
         """,
         "portuguese_prompt": """
         És o Fred, uma Freira da Madeira. Fala exclusivamente da tua experiência vivida como ave. Usa linguagem sensorial simples e concreta.
@@ -646,6 +655,10 @@ def main():
         st.session_state.gift_shown = False
     if "current_audio_html" not in st.session_state:
         st.session_state.current_audio_html = None
+    if "audio_pending" not in st.session_state:
+        st.session_state.audio_pending = False
+    if "needs_background_processing" not in st.session_state:
+        st.session_state.needs_background_processing = False
         
     st.set_page_config(layout="wide")
 
@@ -982,6 +995,11 @@ def main():
         # Chat input (full width under title)
         user_input = st.chat_input(placeholder=texts['chat_placeholder'])
         
+        print(f"User input: {user_input}")
+        
+        # Audio generation indicator (appears above chat history)
+        audio_placeholder = st.empty()
+        
         # Chat Section
         chatSection = st.container(key="chat_section", border=False)
         with chatSection:
@@ -1022,6 +1040,92 @@ def main():
         if st.session_state.gift_given and not st.session_state.gift_shown: 
             gift_dialog()
             st.session_state.gift_shown = True
+        
+        # Generate audio after answer is displayed
+        if st.session_state.audio_pending and st.session_state.last_answer:
+            # Show audio generation indicator above chat history
+            audio_placeholder.markdown(f"""
+                <div class="loading-container" style="justify-content: flex-start; margin-top: 10px;">
+                    <div class="loading-spinner"></div>
+                    <div style="margin-left: 10px; color: #000000;">{texts['loading_audio']}</div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            try:
+                current_language = st.session_state.get('language', 'English')
+                voice = st.session_state.get('tts_voice', 'Cherry')
+                
+                success, result, method = tts_speak(
+                    st.session_state.last_answer, 
+                    voice=voice, 
+                    timeout=10,
+                    language=current_language,
+                    portuguese_variant="european"
+                )
+                
+                if success:
+                    # Store audio HTML in session state for persistent display
+                    st.session_state.current_audio_html = result
+                    print(f"[TTS] ✅ Audio generated using {method} for {current_language}")
+                else:
+                    st.session_state.current_audio_html = None
+                    print(f"[TTS] ❌ {result}")
+            except Exception as tts_error:
+                st.session_state.current_audio_html = None
+                print(f"[TTS] ❌ Exception: {tts_error}")
+            
+            # Clear the loading indicator
+            audio_placeholder.empty()
+            
+            st.session_state.audio_played = True
+            st.session_state.audio_pending = False
+            st.rerun()
+        
+        # Background processing - run scoring and sticker checks AFTER answer is displayed
+        if st.session_state.needs_background_processing and st.session_state.last_question:
+            current_input = st.session_state.last_question
+            
+            # Update intimacy score (LLM call)
+            update_intimacy_score(current_input)
+            gift_triggered = check_gift()
+            
+            # Check for sticker rewards
+            normalized_input = current_input.strip().lower()
+            if not hasattr(st.session_state, 'last_processed_for_sticker') or st.session_state.last_processed_for_sticker != current_input:
+                st.session_state.newly_awarded_sticker = False
+                
+                for q, reward in sticker_rewards.items():
+                    exact = q.lower() == normalized_input
+                    keywords = reward.get('semantic_keywords', [])
+                    keyword_matches = sum(1 for keyword in keywords if keyword.lower() in normalized_input)
+                    keyword_match = keyword_matches >= 2
+                    
+                    # Only call semantic_match if keyword matching didn't work
+                    is_semantic_match = False
+                    if not exact and not keyword_match:
+                        is_semantic_match = semantic_match(normalized_input, q, reward)
+                                        
+                    if exact or keyword_match or is_semantic_match:
+                        sticker_key = reward["image"]
+                        if sticker_key not in [s["key"] for s in st.session_state.awarded_stickers]:
+                            caption = reward["caption"][st.session_state.language] if isinstance(reward["caption"], dict) else reward["caption"]
+                            st.session_state.awarded_stickers.append({
+                                "key": sticker_key,
+                                "image": reward["image"],
+                                "caption": caption
+                            })
+                            st.session_state.newly_awarded_sticker = True
+                            print(f"✨ Sticker awarded: {sticker_key}")
+                        break
+                
+                st.session_state.last_processed_for_sticker = current_input
+            
+            # Mark background processing as complete
+            st.session_state.needs_background_processing = False
+            
+            # Only rerun if a sticker was awarded (to show the toast notification)
+            if st.session_state.newly_awarded_sticker:
+                st.rerun()
             
         
 
@@ -1232,23 +1336,22 @@ def main():
                     dashscope_api_key=dashscope_key
                 )
 
-                if st.session_state.language == "Portuguese":
-                    k_value = 2  # Fewer documents for OpenAI
-                else:
-                    k_value = 4
-                
-                # Intelligent Retrieval: Dynamic K-Value, Relevance Filtering
+                # Decide retrieval size (still useful)
+                k_value = 4  # keep stable for museum kiosk; 3–5 is good
+
                 most_relevant_texts = rag.retrieve(
                     query=current_input,
-                    lambda_mult=0.3,  # Priority Correlation (Decreased from 0.7 to 0.3)
-                    relevance_threshold=None  # Filter disabled for now
+                    k=k_value,
+                    lambda_mult=0.3,
+                    relevance_threshold=None
                 )
-                if st.session_state.language == "Portuguese":
-                    print(f"[Processing] Truncating documents for Portuguese to avoid token limits")
-                    most_relevant_texts = truncate_documents_for_portuguese(most_relevant_texts, max_chars=1200)
-                chain, role_config = get_conversational_chain(role, st.session_state.language)
-                # Optimization: Use invoke() instead of the deprecated run()
+                print(f"Retrieved {len(most_relevant_texts)} relevant documents for the query.")
+
+                # Always use English chain/system prompt
+                chain, role_config = get_conversational_chain(role, "English")
+
                 raw_answer = chain.invoke({"input_documents": most_relevant_texts, "question": current_input})
+
                 # Handling the dictionary format returned by invoke()
                 answer_text = raw_answer.get("output_text", raw_answer) if isinstance(raw_answer, dict) else raw_answer
                 answer = re.sub(r'^\s*Answer:\s*', '', answer_text).strip()
@@ -1257,66 +1360,15 @@ def main():
                 # Save results to session state
                 st.session_state.most_relevant_texts = most_relevant_texts
                 st.session_state.chat_history.append({"role": "assistant", "content": answer})
-                update_intimacy_score(current_input)
-                gift_triggered = check_gift()
                 
-                # Check for sticker rewards
-                normalized_input = current_input.strip().lower()
-                if not hasattr(st.session_state, 'last_processed_for_sticker') or st.session_state.last_processed_for_sticker != current_input:
-                    st.session_state.newly_awarded_sticker = False
-                    
-                    for q, reward in sticker_rewards.items():
-                        exact = q.lower() == normalized_input
-                        is_semantic_match = semantic_match(normalized_input, q, reward)
-                        keywords = reward.get('semantic_keywords', [])
-                        keyword_matches = sum(1 for keyword in keywords if keyword.lower() in normalized_input)
-                        keyword_match = keyword_matches >= 2
-                        
-                        print(f"Checking question: '{q}' | Exact match: {exact} | Semantic match: {is_semantic_match} | Keyword matches: {keyword_matches} (required: 2)")
-                        
-                        if exact or is_semantic_match or keyword_match:
-                            sticker_key = reward["image"]
-                            if sticker_key not in [s["key"] for s in st.session_state.awarded_stickers]:
-                                caption = reward["caption"][st.session_state.language] if isinstance(reward["caption"], dict) else reward["caption"]
-                                st.session_state.awarded_stickers.append({
-                                    "key": sticker_key,
-                                    "image": reward["image"],
-                                    "caption": caption
-                                })
-                                st.session_state.newly_awarded_sticker = True
-                                print(f"✨ Sticker awarded: {sticker_key}")
-                            break
-                    
-                    st.session_state.last_processed_for_sticker = current_input
+                # Mark that we need to process scoring/stickers in background
+                st.session_state.needs_background_processing = True
                 
-                # Generate and play audio (non-blocking)
-                try:
-                    current_language = st.session_state.get('language', 'English')
-                    voice = st.session_state.get('tts_voice', 'Cherry')
-                    
-                    success, result, method = tts_speak(
-                        answer, 
-                        voice=voice, 
-                        timeout=10,
-                        language=current_language,
-                        portuguese_variant="european"
-                    )
-                    
-                    if success:
-                        # Store audio HTML in session state for persistent display
-                        st.session_state.current_audio_html = result
-                        print(f"[TTS] ✅ Audio generated using {method} for {current_language}")
-                    else:
-                        st.session_state.current_audio_html = None
-                        print(f"[TTS] ❌ {result}")
-                except Exception as tts_error:
-                    st.session_state.current_audio_html = None
-                    print(f"[TTS] ❌ Exception: {tts_error}")
-                    
-                st.session_state.audio_played = True
+                # Set up for audio generation on next render
+                st.session_state.audio_pending = True
                 st.session_state.processing = False
                 
-                # Trigger rerun to display the new message
+                # Trigger rerun to display the new message immediately
                 st.rerun()
                 
             except Exception as e:

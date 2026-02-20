@@ -15,25 +15,13 @@ def get_friendly_filename(source_file):
     """
     filename_mapping = {
         # Your Excel mappings
-        '41_S_1-43.pdf': 'Simons et al 2013 - Diablotin Pterodroma hasitata Biography of the Black-capped Petrel',
-        '2024FloodZinos1stBritain.pdf': 'Flood 2024 - Zino\'s Petrel off Scilly new to Britain',
-        '3906_pterodroma_madeira.pdf': 'BirdLife International 2021 - Pterodroma madeira Zinos Petrel',
         'Conservation_of_Zinos_petrel_Pterodroma.pdf': 'Zino et al 2001 - Conservation of Zinos petrel Pterodroma madeira in Madeira',
-        'conservation-of-zinos-petrel-pterodroma-madeira-in-the-archipelago-of-madeira.pdf': 'Zino et al 2001 - Conservation of Zinos petrel Pterodroma madeira in Madeira',
         'Madeira_Zinos_Petrel_2010_0.pdf': 'BirdLife International 2010 - Race against the clock to save Zinos Petrel',
-        'Madeira-2021.pdf': 'Flood 2021 - ORIOLE BIRDING TOUR TO MADEIRA ENDEMICS AND SEABIRDS 5-9 JULY 2021',
-        'madeira-2024-text.pdf': 'Koppenol 2024 - MADEIRA TOUR REPORT 2024',
         'Madeira2004_NB.pdf': 'Brinkley 2004 - Zinos Petrel at sea off Madeira 27 April 2004',
-        'pterodromaRefs_v1.15.pdf': 'Hobbs 2017 - Pterodroma Reference List - Comprehensive bibliography of gadfly petrels',
-        'Shirihai_Jamaica_AtSea_Nov09.pdf': 'Shirihai et al 2010 - Jamaica Petrel Pterodroma caribbaea Pelagic expedition report',
-        'srep23447.pdf': 'Ramos et al 2016 - Global spatial ecology of three closely related gadfly petrels',
         'The_separation_of_Pterodroma_madeira_Zin.pdf': 'Zino et al 2008 - The separation of Pterodroma madeira from Pterodroma feae',
-        'v36n6p586.pdf': 'Patteson & Brinkley 2004 - A Petrel Primer - The Gadflies of North Carolina',
-        'v40n6p28.pdf': 'Hess 2008 - Feas or Zinos Petrel',
         'Zino_s_Petrel_Pterodroma_madeira_off_Nor.pdf': 'Patteson et al 2013 - Zinos Petrel Pterodroma madeira off North Carolina - First for North America',
         'zinos-petrel-1995.pdf': 'Zino et al 1995 - Action Plan for Zinos Petrel Pterodroma madeira',
-        'zlae123.pdf': 'Rando et al 2024 - Pterodroma zinorum Biography of an extinct Azorean petrel',
-        
+        'IFCN_2024_Freira-da-Madeira_Factsheet': 'IFCN 2024 - Freira-da-Madeira (Zino’s Petrel) information sheet',
         # Default fallback
         'unknown': 'Unknown Document'
     }
@@ -61,8 +49,21 @@ def summarize_fact_check(question, retrieved_docs, ai_answer, language="English"
     
     for i, doc in enumerate(retrieved_docs[:3], 1):  # Use a maximum of 3 documents
         content = doc.page_content[:500]  # Each document is limited to 500 characters.
-        source = doc.metadata.get('source_file', 'Unknown')
-        page = doc.metadata.get('page', 'N/A')
+        meta = doc.metadata or {}
+        source = (
+            meta.get("source_file")
+            or meta.get("file_name")
+            or meta.get("filename")
+            or meta.get("source")          # sometimes LangChain uses this
+            or meta.get("path")            # sometimes the full path
+            or "unknown"
+        )
+
+        # If it's a full path, keep only the basename
+        source = os.path.basename(source)
+
+        page = meta.get("page") or meta.get("page_number") or meta.get("loc", "N/A")
+
 
         friendly_name = get_friendly_filename(source)
         
